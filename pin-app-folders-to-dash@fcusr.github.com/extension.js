@@ -17,6 +17,10 @@ let gettextFn = text => text;
 let originalDashGetAppFromSource = null;
 let originalDashGetAppFromSourceDescriptor = null;
 let dashGetAppFromSourcePatchMode = null;
+const DASH_TO_DOCK_UUID = 'dash-to-dock@micxgx.gmail.com';
+const originalCreateAppItemKey = Symbol('originalCreateAppItem');
+let createAppItemPatchTargets = new Set();
+let extensionStateChangedSignalId = 0;
 
 function getOverviewControls() {
     return Main.overview?._overview?._controls ?? null;
@@ -33,6 +37,47 @@ function lookupAppFolder(id) {
         appFolders[id].get_id = () => id;
     }
     return appFolders[id];
+}
+
+function isFolderFavoriteApp(app) {
+    return typeof app === 'string' || app instanceof String;
+}
+
+function getDashToDockManager() {
+    let extension = Main.extensionManager?.lookup?.(DASH_TO_DOCK_UUID);
+    return extension?.module?.dockManager ?? null;
+}
+
+function patchCreateAppItemTarget(target) {
+    if (!target || typeof target._createAppItem !== 'function')
+        return;
+
+    if (target._createAppItem === createAppItem || createAppItemPatchTargets.has(target))
+        return;
+
+    target[originalCreateAppItemKey] = target._createAppItem;
+    target._createAppItem = createAppItem;
+    createAppItemPatchTargets.add(target);
+}
+
+function patchDashCreateAppItems() {
+    patchCreateAppItemTarget(Dash.Dash.prototype);
+    patchCreateAppItemTarget(getOverviewControls()?.dash?.constructor?.prototype);
+
+    let docks = getDashToDockManager()?._allDocks ?? [];
+    docks.forEach(dock => {
+        patchCreateAppItemTarget(dock?.dash?.constructor?.prototype);
+    });
+}
+
+function restoreCreateAppItemPatches() {
+    createAppItemPatchTargets.forEach(target => {
+        if (target._createAppItem === createAppItem &&
+            typeof target[originalCreateAppItemKey] === 'function')
+            target._createAppItem = target[originalCreateAppItemKey];
+        delete target[originalCreateAppItemKey];
+    });
+    createAppItemPatchTargets.clear();
 }
 
 function ensurePlaceholder(source) {
@@ -242,10 +287,17 @@ function getAppFromSource(source) {
 }
 
 function createAppItem(app) {
-    if (app instanceof Shell.App)
-        return this._originalCreateAppItem.call(this, app);
+    let originalCreateAppItem = this[originalCreateAppItemKey];
+    if (typeof originalCreateAppItem !== 'function')
+        throw new Error('Missing original _createAppItem implementation');
+
+    if (!isFolderFavoriteApp(app))
+        return originalCreateAppItem.call(this, app);
 
     let appDisplay = getAppDisplay();
+    if (!appDisplay)
+        return originalCreateAppItem.call(this, app);
+
     let id = app.toString();
     let path = `${appDisplay._folderSettings.path}folders/${id}/`;
     let appIcon = new AppDisplay.FolderIcon(id, path, appDisplay);
@@ -256,7 +308,18 @@ function createAppItem(app) {
         appIcon.view._redisplay();
     });
 
-    let item = new Dash.DashItemContainer();
+    let prototypeItem = this._showAppsIcon?.get_parent?.();
+    let item = null;
+    if (prototypeItem?.constructor) {
+        try {
+            item = new prototypeItem.constructor(this._position);
+        } catch (_error) {
+            item = null;
+        }
+    }
+    if (!item)
+        item = new Dash.DashItemContainer();
+
     item.setChild(appIcon);
     appIcon.icon.style_class = 'overview-icon';
     if (appIcon.icon._box.remove_actor)
@@ -270,7 +333,10 @@ function createAppItem(app) {
     appIcon.icon.setIconSize(this.iconSize);
     appIcon.icon.y_align = Clutter.ActorAlign.CENTER;
     appIcon.shouldShowTooltip = () => appIcon.hover && (!appIcon._menu || !appIcon._menu.isOpen);
-    this._hookUpLabel(item);
+    if (this._hookUpLabel.length > 1)
+        this._hookUpLabel(item, appIcon);
+    else
+        this._hookUpLabel(item);
 
     return item;
 }
@@ -296,6 +362,7 @@ export default class PinAppFoldersToDashExtension extends Extension {
     enable() {
         gettextFn = this.gettext.bind(this);
         appFolders = {};
+        createAppItemPatchTargets = new Set();
 
         let appDisplayProto = AppDisplay.AppDisplay.prototype;
         appDisplayProto._originalEnsurePlaceholder = appDisplayProto._ensurePlaceholder;
@@ -345,9 +412,12 @@ export default class PinAppFoldersToDashExtension extends Extension {
             dashGetAppFromSourcePatchMode = null;
         }
 
-        let dashProto = Dash.Dash.prototype;
-        dashProto._originalCreateAppItem = dashProto._createAppItem;
-        dashProto._createAppItem = createAppItem;
+        patchDashCreateAppItems();
+        extensionStateChangedSignalId = Main.extensionManager.connect('extension-state-changed',
+            (_manager, extension) => {
+                if (extension?.uuid === DASH_TO_DOCK_UUID)
+                    patchDashCreateAppItems();
+            });
 
         redisplayIcons();
     }
@@ -379,8 +449,11 @@ export default class PinAppFoldersToDashExtension extends Extension {
         originalDashGetAppFromSourceDescriptor = null;
         dashGetAppFromSourcePatchMode = null;
 
-        let dashProto = Dash.Dash.prototype;
-        dashProto._createAppItem = dashProto._originalCreateAppItem;
+        if (extensionStateChangedSignalId) {
+            Main.extensionManager.disconnect(extensionStateChangedSignalId);
+            extensionStateChangedSignalId = 0;
+        }
+        restoreCreateAppItemPatches();
 
         redisplayIcons();
         gettextFn = text => text;
