@@ -16,6 +16,7 @@ let appFolders = {};
 let gettextFn = text => text;
 let originalDashGetAppFromSource = null;
 let originalDashGetAppFromSourceDescriptor = null;
+let dashGetAppFromSourcePatchMode = null;
 
 function getOverviewControls() {
     return Main.overview?._overview?._controls ?? null;
@@ -234,7 +235,10 @@ function getAppFromSource(source) {
     if (source instanceof AppDisplay.FolderIcon)
         return source.app;
 
-    return originalDashGetAppFromSource.call(Dash, source);
+    if (typeof originalDashGetAppFromSource === 'function')
+        return originalDashGetAppFromSource.call(Dash, source);
+
+    return source?.app ?? null;
 }
 
 function createAppItem(app) {
@@ -317,10 +321,29 @@ export default class PinAppFoldersToDashExtension extends Extension {
 
         originalDashGetAppFromSourceDescriptor = Object.getOwnPropertyDescriptor(Dash, 'getAppFromSource') ?? null;
         originalDashGetAppFromSource = originalDashGetAppFromSourceDescriptor?.value ?? Dash.getAppFromSource;
-        let getAppFromSourceDescriptor = originalDashGetAppFromSourceDescriptor
-            ? {...originalDashGetAppFromSourceDescriptor, value: getAppFromSource}
-            : {value: getAppFromSource, writable: true, configurable: true};
-        Object.defineProperty(Dash, 'getAppFromSource', getAppFromSourceDescriptor);
+        dashGetAppFromSourcePatchMode = null;
+        try {
+            if (originalDashGetAppFromSourceDescriptor?.configurable) {
+                let getAppFromSourceDescriptor = {
+                    ...originalDashGetAppFromSourceDescriptor,
+                    value: getAppFromSource,
+                };
+                Object.defineProperty(Dash, 'getAppFromSource', getAppFromSourceDescriptor);
+                dashGetAppFromSourcePatchMode = 'define';
+            } else if (originalDashGetAppFromSourceDescriptor?.writable) {
+                Dash.getAppFromSource = getAppFromSource;
+                dashGetAppFromSourcePatchMode = 'assign';
+            } else if (!originalDashGetAppFromSourceDescriptor && Object.isExtensible(Dash)) {
+                Object.defineProperty(Dash, 'getAppFromSource', {
+                    value: getAppFromSource,
+                    writable: true,
+                    configurable: true,
+                });
+                dashGetAppFromSourcePatchMode = 'define';
+            }
+        } catch (_error) {
+            dashGetAppFromSourcePatchMode = null;
+        }
 
         let dashProto = Dash.Dash.prototype;
         dashProto._originalCreateAppItem = dashProto._createAppItem;
@@ -344,17 +367,17 @@ export default class PinAppFoldersToDashExtension extends Extension {
         appFavoritesProto.removeFavorite = appFavoritesProto._originalRemoveFavorite;
         appFavoritesProto.reload = appFavoritesProto._originalReload;
 
-        if (originalDashGetAppFromSourceDescriptor) {
-            Object.defineProperty(Dash, 'getAppFromSource', originalDashGetAppFromSourceDescriptor);
-        } else {
-            Object.defineProperty(Dash, 'getAppFromSource', {
-                value: originalDashGetAppFromSource,
-                writable: true,
-                configurable: true,
-            });
+        if (dashGetAppFromSourcePatchMode === 'define') {
+            if (originalDashGetAppFromSourceDescriptor)
+                Object.defineProperty(Dash, 'getAppFromSource', originalDashGetAppFromSourceDescriptor);
+            else
+                delete Dash.getAppFromSource;
+        } else if (dashGetAppFromSourcePatchMode === 'assign') {
+            Dash.getAppFromSource = originalDashGetAppFromSource;
         }
         originalDashGetAppFromSource = null;
         originalDashGetAppFromSourceDescriptor = null;
+        dashGetAppFromSourcePatchMode = null;
 
         let dashProto = Dash.Dash.prototype;
         dashProto._createAppItem = dashProto._originalCreateAppItem;
