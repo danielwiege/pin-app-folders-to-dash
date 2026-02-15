@@ -14,6 +14,8 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 let appFolders = {};
 let gettextFn = text => text;
+let originalDashGetAppFromSource = null;
+let originalDashGetAppFromSourceDescriptor = null;
 
 function getOverviewControls() {
     return Main.overview?._overview?._controls ?? null;
@@ -232,7 +234,7 @@ function getAppFromSource(source) {
     if (source instanceof AppDisplay.FolderIcon)
         return source.app;
 
-    return Dash._originalGetAppFromSource(source);
+    return originalDashGetAppFromSource.call(Dash, source);
 }
 
 function createAppItem(app) {
@@ -313,8 +315,12 @@ export default class PinAppFoldersToDashExtension extends Extension {
         appFavoritesProto._originalReload = appFavoritesProto.reload;
         appFavoritesProto.reload = reload;
 
-        Dash._originalGetAppFromSource = Dash.getAppFromSource;
-        Dash.getAppFromSource = getAppFromSource;
+        originalDashGetAppFromSourceDescriptor = Object.getOwnPropertyDescriptor(Dash, 'getAppFromSource') ?? null;
+        originalDashGetAppFromSource = originalDashGetAppFromSourceDescriptor?.value ?? Dash.getAppFromSource;
+        let getAppFromSourceDescriptor = originalDashGetAppFromSourceDescriptor
+            ? {...originalDashGetAppFromSourceDescriptor, value: getAppFromSource}
+            : {value: getAppFromSource, writable: true, configurable: true};
+        Object.defineProperty(Dash, 'getAppFromSource', getAppFromSourceDescriptor);
 
         let dashProto = Dash.Dash.prototype;
         dashProto._originalCreateAppItem = dashProto._createAppItem;
@@ -338,7 +344,17 @@ export default class PinAppFoldersToDashExtension extends Extension {
         appFavoritesProto.removeFavorite = appFavoritesProto._originalRemoveFavorite;
         appFavoritesProto.reload = appFavoritesProto._originalReload;
 
-        Dash.getAppFromSource = Dash._originalGetAppFromSource;
+        if (originalDashGetAppFromSourceDescriptor) {
+            Object.defineProperty(Dash, 'getAppFromSource', originalDashGetAppFromSourceDescriptor);
+        } else {
+            Object.defineProperty(Dash, 'getAppFromSource', {
+                value: originalDashGetAppFromSource,
+                writable: true,
+                configurable: true,
+            });
+        }
+        originalDashGetAppFromSource = null;
+        originalDashGetAppFromSourceDescriptor = null;
 
         let dashProto = Dash.Dash.prototype;
         dashProto._createAppItem = dashProto._originalCreateAppItem;
