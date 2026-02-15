@@ -308,6 +308,12 @@ function createAppItem(app) {
         appIcon.view._redisplay();
     });
 
+    // Dash-to-Dock expects these methods on every icon it tracks.
+    appIcon.setNumberOverlay ??= () => {};
+    appIcon.updateNumberOverlay ??= () => {};
+    appIcon.toggleNumberOverlay ??= () => {};
+    appIcon.updateIconGeometry ??= () => {};
+
     let prototypeItem = this._showAppsIcon?.get_parent?.();
     let item = null;
     if (prototypeItem?.constructor) {
