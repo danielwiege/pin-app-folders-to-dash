@@ -369,16 +369,15 @@ function createAppItem(app) {
     appIcon.updateIconGeometry ??= () => {};
 
     let item = new Dash.DashItemContainer();
-    appIcon.connect('menu-state-changed', (_icon, opened) => {
-        this._itemMenuStateChanged?.(item, opened);
-    });
 
     item.setChild(appIcon);
     appIcon.icon.style_class = 'overview-icon';
-    if (appIcon.icon._box.remove_actor)
-        appIcon.icon._box.remove_actor(appIcon.icon.label);
-    else
-        appIcon.icon._box.remove_child(appIcon.icon.label);
+    if (appIcon.icon.label?.get_parent?.() === appIcon.icon._box) {
+        if (appIcon.icon._box.remove_actor)
+            appIcon.icon._box.remove_actor(appIcon.icon.label);
+        else
+            appIcon.icon._box.remove_child(appIcon.icon.label);
+    }
 
     appIcon.label_actor = null;
     appIcon.icon.label = null;
