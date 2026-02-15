@@ -18,9 +18,13 @@ let originalDashGetAppFromSource = null;
 let originalDashGetAppFromSourceDescriptor = null;
 let dashGetAppFromSourcePatchMode = null;
 const DASH_TO_DOCK_UUID = 'dash-to-dock@micxgx.gmail.com';
+const APP_FOLDERS_SCHEMA_ID = 'org.gnome.desktop.app-folders';
+const APP_FOLDERS_BASE_PATH = '/org/gnome/desktop/app-folders/';
 const originalCreateAppItemKey = Symbol('originalCreateAppItem');
 let createAppItemPatchTargets = new Set();
 let extensionStateChangedSignalId = 0;
+let appFoldersSettings = null;
+let fallbackFolderParentView = null;
 
 function getOverviewControls() {
     return Main.overview?._overview?._controls ?? null;
@@ -28,6 +32,47 @@ function getOverviewControls() {
 
 function getAppDisplay() {
     return getOverviewControls()?._appDisplay ?? null;
+}
+
+function getAppFoldersSettings() {
+    if (!appFoldersSettings) {
+        appFoldersSettings = new Gio.Settings({
+            schema_id: APP_FOLDERS_SCHEMA_ID,
+        });
+    }
+    return appFoldersSettings;
+}
+
+function getFolderChildren() {
+    return getAppFoldersSettings().get_strv('folder-children');
+}
+
+function getFolderSettingsPath(id) {
+    let basePath = getAppFoldersSettings().path ?? APP_FOLDERS_BASE_PATH;
+    return `${basePath}folders/${id}/`;
+}
+
+function getFallbackFolderParentView() {
+    if (!fallbackFolderParentView) {
+        fallbackFolderParentView = {
+            getAppInfos() {
+                return Shell.AppSystem.get_default().get_installed();
+            },
+            addFolderDialog(dialog) {
+                if (!dialog.get_parent?.()) {
+                    if (Main.uiGroup.add_actor)
+                        Main.uiGroup.add_actor(dialog);
+                    else
+                        Main.uiGroup.add_child(dialog);
+                }
+            },
+        };
+    }
+    return fallbackFolderParentView;
+}
+
+function getFolderParentView() {
+    return getAppDisplay() ?? getFallbackFolderParentView();
 }
 
 function lookupAppFolder(id) {
@@ -190,11 +235,7 @@ function updateName() {
 function reload() {
     this._originalReload.call(this);
 
-    let appDisplay = getAppDisplay();
-    if (!appDisplay)
-        return;
-
-    let folders = appDisplay._folderSettings.get_strv('folder-children');
+    let folders = getFolderChildren();
     let ids = global.settings.get_strv(this.FAVORITE_APPS_KEY);
     this._favorites = {};
 
@@ -208,8 +249,7 @@ function reload() {
 }
 
 function addFavorite(appId, pos) {
-    let appDisplay = getAppDisplay();
-    let folders = appDisplay?._folderSettings.get_strv('folder-children') ?? [];
+    let folders = getFolderChildren();
 
     if (!folders.includes(appId))
         return this._originalAddFavorite.call(this, appId, pos);
@@ -224,8 +264,7 @@ function addFavorite(appId, pos) {
 }
 
 function addFavoriteAtPos(appId, pos) {
-    let appDisplay = getAppDisplay();
-    let folders = appDisplay?._folderSettings.get_strv('folder-children') ?? [];
+    let folders = getFolderChildren();
 
     if (!folders.includes(appId)) {
         this._originalAddFavoriteAtPos.call(this, appId, pos);
@@ -235,7 +274,7 @@ function addFavoriteAtPos(appId, pos) {
     if (!this._addFavorite(appId, pos))
         return;
 
-    let path = `${appDisplay._folderSettings.path}folders/${appId}/`;
+    let path = getFolderSettingsPath(appId);
     let folder = new Gio.Settings({
         schema_id: 'org.gnome.desktop.app-folders.folder',
         path,
@@ -250,8 +289,7 @@ function addFavoriteAtPos(appId, pos) {
 }
 
 function removeFavorite(appId) {
-    let appDisplay = getAppDisplay();
-    let folders = appDisplay?._folderSettings.get_strv('folder-children') ?? [];
+    let folders = getFolderChildren();
 
     if (!folders.includes(appId)) {
         this._originalRemoveFavorite.call(this, appId);
@@ -262,7 +300,7 @@ function removeFavorite(appId) {
     if (!this._removeFavorite(appId))
         return;
 
-    let path = `${appDisplay._folderSettings.path}folders/${appId}/`;
+    let path = getFolderSettingsPath(appId);
     let folder = new Gio.Settings({
         schema_id: 'org.gnome.desktop.app-folders.folder',
         path,
@@ -294,17 +332,14 @@ function createAppItem(app) {
     if (!isFolderFavoriteApp(app))
         return originalCreateAppItem.call(this, app);
 
-    let appDisplay = getAppDisplay();
-    if (!appDisplay)
-        return originalCreateAppItem.call(this, app);
-
     let id = app.toString();
-    let path = `${appDisplay._folderSettings.path}folders/${id}/`;
-    let appIcon = new AppDisplay.FolderIcon(id, path, appDisplay);
+    let path = getFolderSettingsPath(id);
+    let appIcon = new AppDisplay.FolderIcon(id, path, getFolderParentView());
 
     appIcon.connect('apps-changed', () => {
-        appDisplay._redisplay();
-        appDisplay._savePages();
+        let appDisplay = getAppDisplay();
+        appDisplay?._redisplay();
+        appDisplay?._savePages();
         appIcon.view._redisplay();
     });
 
@@ -314,17 +349,7 @@ function createAppItem(app) {
     appIcon.toggleNumberOverlay ??= () => {};
     appIcon.updateIconGeometry ??= () => {};
 
-    let prototypeItem = this._showAppsIcon?.get_parent?.();
-    let item = null;
-    if (prototypeItem?.constructor) {
-        try {
-            item = new prototypeItem.constructor(this._position);
-        } catch (_error) {
-            item = null;
-        }
-    }
-    if (!item)
-        item = new Dash.DashItemContainer();
+    let item = new Dash.DashItemContainer();
 
     item.setChild(appIcon);
     appIcon.icon.style_class = 'overview-icon';
@@ -339,10 +364,7 @@ function createAppItem(app) {
     appIcon.icon.setIconSize(this.iconSize);
     appIcon.icon.y_align = Clutter.ActorAlign.CENTER;
     appIcon.shouldShowTooltip = () => appIcon.hover && (!appIcon._menu || !appIcon._menu.isOpen);
-    if (this._hookUpLabel.length > 1)
-        this._hookUpLabel(item, appIcon);
-    else
-        this._hookUpLabel(item);
+    this._hookUpLabel(item);
 
     return item;
 }
@@ -352,22 +374,27 @@ function redisplayIcons() {
 
     let controls = getOverviewControls();
     let appDisplay = controls?._appDisplay;
-    if (!appDisplay)
-        return;
+    if (appDisplay) {
+        let apps = appDisplay._orderedItems.slice();
+        apps.forEach(icon => {
+            appDisplay._removeItem(icon);
+        });
+        appDisplay._redisplay();
+    }
 
-    let apps = appDisplay._orderedItems.slice();
-    apps.forEach(icon => {
-        appDisplay._removeItem(icon);
+    controls?.dash?._queueRedisplay?.();
+    let docks = getDashToDockManager()?._allDocks ?? [];
+    docks.forEach(dock => {
+        dock?.dash?._queueRedisplay?.();
     });
-
-    appDisplay._redisplay();
-    controls.dash?._queueRedisplay();
 }
 
 export default class PinAppFoldersToDashExtension extends Extension {
     enable() {
         gettextFn = this.gettext.bind(this);
         appFolders = {};
+        appFoldersSettings = null;
+        fallbackFolderParentView = null;
         createAppItemPatchTargets = new Set();
 
         let appDisplayProto = AppDisplay.AppDisplay.prototype;
@@ -464,5 +491,7 @@ export default class PinAppFoldersToDashExtension extends Extension {
         redisplayIcons();
         gettextFn = text => text;
         appFolders = {};
+        appFoldersSettings = null;
+        fallbackFolderParentView = null;
     }
 }
