@@ -84,8 +84,26 @@ function lookupAppFolder(id) {
     return appFolders[id];
 }
 
-function isFolderFavoriteApp(app) {
-    return typeof app === 'string' || app instanceof String;
+function getFolderFavoriteId(app) {
+    let folders = getFolderChildren();
+
+    if (typeof app === 'string')
+        return folders.includes(app) ? app : null;
+
+    if (app instanceof String) {
+        let id = app.toString();
+        return folders.includes(id) ? id : null;
+    }
+
+    if (app && typeof app.get_id === 'function') {
+        let id = app.get_id();
+        return folders.includes(id) ? id : null;
+    }
+
+    if (app && typeof app.id === 'string')
+        return folders.includes(app.id) ? app.id : null;
+
+    return null;
 }
 
 function getDashToDockManager() {
@@ -329,12 +347,13 @@ function createAppItem(app) {
     if (typeof originalCreateAppItem !== 'function')
         throw new Error('Missing original _createAppItem implementation');
 
-    if (!isFolderFavoriteApp(app))
+    let id = getFolderFavoriteId(app);
+    if (!id)
         return originalCreateAppItem.call(this, app);
 
-    let id = app.toString();
     let path = getFolderSettingsPath(id);
     let appIcon = new AppDisplay.FolderIcon(id, path, getFolderParentView());
+    appIcon.app = lookupAppFolder(id);
 
     appIcon.connect('apps-changed', () => {
         let appDisplay = getAppDisplay();
@@ -350,6 +369,9 @@ function createAppItem(app) {
     appIcon.updateIconGeometry ??= () => {};
 
     let item = new Dash.DashItemContainer();
+    appIcon.connect('menu-state-changed', (_icon, opened) => {
+        this._itemMenuStateChanged?.(item, opened);
+    });
 
     item.setChild(appIcon);
     appIcon.icon.style_class = 'overview-icon';
