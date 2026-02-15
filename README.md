@@ -2,6 +2,8 @@
 
 Allow to pin app folders to dash.
 
+Compatible with GNOME Shell 45-49 (including Fedora 43).
+
 [Get it on GNOME Extensions][get]
 
 ![Screenshot](https://extensions.gnome.org/extension-data/screenshots/screenshot_5709_mxK2pxi.png)
