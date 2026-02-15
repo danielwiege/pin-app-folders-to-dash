@@ -75,6 +75,20 @@ function getFolderParentView() {
     return getAppDisplay() ?? getFallbackFolderParentView();
 }
 
+function getFolderName(folderSettings, fallback = '') {
+    if (typeof AppDisplay._getFolderName === 'function')
+        return AppDisplay._getFolderName(folderSettings);
+
+    if (typeof AppDisplay.getFolderName === 'function')
+        return AppDisplay.getFolderName(folderSettings);
+
+    let name = folderSettings.get_string('name');
+    if (name && name.length > 0)
+        return name;
+
+    return fallback;
+}
+
 function lookupAppFolder(id) {
     if (!appFolders[id]) {
         appFolders[id] = new String(id);
@@ -243,7 +257,7 @@ function popupMenu() {
 function updateName() {
     let item = this.get_parent();
     if (item instanceof Dash.DashItemContainer) {
-        this._name = AppDisplay._getFolderName(this._folder);
+        this._name = getFolderName(this._folder, this._id);
         item.setLabelText(this._name);
     } else {
         this._originalUpdateName.call(this);
@@ -298,7 +312,7 @@ function addFavoriteAtPos(appId, pos) {
         path,
     });
 
-    let folderName = AppDisplay._getFolderName(folder);
+    let folderName = getFolderName(folder, appId);
     let msg = gettextFn('%s has been pinned to the dash.').format(folderName);
     Main.overview.setMessage(msg, {
         forFeedback: true,
@@ -324,7 +338,7 @@ function removeFavorite(appId) {
         path,
     });
 
-    let folderName = AppDisplay._getFolderName(folder);
+    let folderName = getFolderName(folder, appId);
     let msg = gettextFn('%s has been unpinned from the dash.').format(folderName);
     Main.overview.setMessage(msg, {
         forFeedback: true,
@@ -381,7 +395,7 @@ function createAppItem(app) {
 
     appIcon.label_actor = null;
     appIcon.icon.label = null;
-    item.setLabelText(AppDisplay._getFolderName(appIcon._folder));
+    item.setLabelText(getFolderName(appIcon._folder, id));
     appIcon.icon.setIconSize(this.iconSize);
     appIcon.icon.y_align = Clutter.ActorAlign.CENTER;
     appIcon.shouldShowTooltip = () => appIcon.hover && (!appIcon._menu || !appIcon._menu.isOpen);
